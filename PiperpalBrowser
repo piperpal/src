@@ -1,0 +1,181 @@
+#!/usr/bin/python3
+__version__ = "1.0.0"
+import gi
+import sqlite3
+gi.require_version("Gtk", "3.0")
+gi.require_version("WebKit2", "4.0")
+from gi.repository import Gtk, WebKit2, GLib
+
+class PiperpalBrowser(Gtk.Window):
+    def __init__(self):
+        super().__init__(title="Piperpal Browser " + __version__)
+        self.set_default_size(1200, 800)
+
+        # Initialize Database
+        self.init_db()
+
+        # Create main layout
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.add(vbox)
+
+        # Create WebView
+        self.webview = WebKit2.WebView()
+        self.webview.load_uri("https://www.piperpal.com/")
+
+        # Navigation Toolbar
+        toolbar = Gtk.Toolbar()
+        vbox.pack_start(toolbar, False, False, 0)
+
+        # Back, Forward, Reload, and Home Buttons
+        self.create_navigation_buttons(toolbar)
+
+        # URL Entry
+        self.url_entry = Gtk.Entry()
+        self.url_entry.set_placeholder_text("Enter URL here")
+        self.url_entry.connect("activate", self.on_url_entry_activate)
+        tool_item = Gtk.ToolItem()
+        tool_item.add(self.url_entry)
+        toolbar.insert(tool_item, 4)
+
+        # History and Bookmarks Buttons
+        self.create_history_bookmarks_buttons(toolbar)
+
+        # Load URL
+        self.webview.connect("load-changed", self.on_load_changed)
+        vbox.pack_start(self.webview, True, True, 0)
+
+    def init_db(self):
+        # Set up the SQLite database to store history and bookmarks
+        self.conn = sqlite3.connect(".config/piperpal_browser.db")
+        cursor = self.conn.cursor()
+        cursor.execute("CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY, url TEXT, title TEXT)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS bookmarks (id INTEGER PRIMARY KEY, url TEXT, title TEXT)")
+        self.conn.commit()
+
+    def create_navigation_buttons(self, toolbar):
+        # Back Button
+        back_button = Gtk.ToolButton.new_from_stock(Gtk.STOCK_GO_BACK)
+        back_button.connect("clicked", self.on_back_button)
+        toolbar.insert(back_button, 0)
+
+        # Forward Button
+        forward_button = Gtk.ToolButton.new_from_stock(Gtk.STOCK_GO_FORWARD)
+        forward_button.connect("clicked", self.on_forward_button)
+        toolbar.insert(forward_button, 1)
+
+        # Reload Button
+        reload_button = Gtk.ToolButton.new_from_stock(Gtk.STOCK_REFRESH)
+        reload_button.connect("clicked", self.on_reload_button)
+        toolbar.insert(reload_button, 2)
+
+        # Home Button
+        home_button = Gtk.ToolButton.new_from_stock(Gtk.STOCK_HOME)
+        home_button.connect("clicked", self.on_home_button)
+        toolbar.insert(home_button, 3)
+
+    def create_history_bookmarks_buttons(self, toolbar):
+        # History Button
+        history_button = Gtk.ToolButton.new_from_stock(Gtk.STOCK_INDEX)
+        history_button.set_label("History")
+        history_button.connect("clicked", self.show_history)
+        toolbar.insert(history_button, 5)
+
+        # Bookmark Button
+        bookmark_button = Gtk.ToolButton.new_from_stock(Gtk.STOCK_ADD)
+        bookmark_button.set_label("Bookmark")
+        bookmark_button.connect("clicked", self.add_bookmark)
+        toolbar.insert(bookmark_button, 6)
+
+        # Show Bookmarks Button
+        show_bookmarks_button = Gtk.ToolButton.new_from_stock(Gtk.STOCK_DIRECTORY)
+        show_bookmarks_button.set_label("Bookmarks")
+        show_bookmarks_button.connect("clicked", self.show_bookmarks)
+        toolbar.insert(show_bookmarks_button, 7)
+
+    def on_back_button(self, widget):
+        if self.webview.can_go_back():
+            self.webview.go_back()
+
+    def on_forward_button(self, widget):
+        if self.webview.can_go_forward():
+            self.webview.go_forward()
+
+    def on_reload_button(self, widget):
+        self.webview.reload()
+
+    def on_home_button(self, widget):
+        self.webview.load_uri("https://www.piperpal.com/")
+
+    def on_url_entry_activate(self, widget):
+        url = self.url_entry.get_text()
+        if not url.startswith("http"):
+            url = "http://" + url
+        self.webview.load_uri(url)
+
+    def on_load_changed(self, webview, load_event):
+        if load_event == WebKit2.LoadEvent.COMMITTED:
+            uri = self.webview.get_uri()
+            title = self.webview.get_title() or uri
+            self.url_entry.set_text(uri)
+            self.add_to_history(uri, title)
+
+    def add_to_history(self, url, title):
+        cursor = self.conn.cursor()
+        cursor.execute("INSERT INTO history (url, title) VALUES (?, ?)", (url, title))
+        self.conn.commit()
+
+    def add_bookmark(self, widget):
+        url = self.webview.get_uri()
+        title = self.webview.get_title() or url
+        cursor = self.conn.cursor()
+        cursor.execute("INSERT INTO bookmarks (url, title) VALUES (?, ?)", (url, title))
+        self.conn.commit()
+        print(f"Bookmark added: {title} - {url}")
+
+    def show_history(self, widget):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT url, title FROM history ORDER BY id DESC LIMIT 10")
+        history_items = cursor.fetchall()
+
+        # Display history items in a dialog
+        dialog = Gtk.Dialog(title="History", parent=self, flags=0)
+        dialog.add_buttons(Gtk.STOCK_OK, Gtk.ResponseType.OK)
+        box = dialog.get_content_area()
+        
+        for url, title in history_items:
+            link = Gtk.LinkButton.new_with_label(url, title)
+            link.connect("clicked", self.on_history_bookmark_clicked, url)
+            box.add(link)
+
+        dialog.show_all()
+        dialog.run()
+        dialog.destroy()
+
+    def show_bookmarks(self, widget):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT url, title FROM bookmarks ORDER BY id DESC")
+        bookmark_items = cursor.fetchall()
+
+        # Display bookmark items in a dialog
+        dialog = Gtk.Dialog(title="Bookmarks", parent=self, flags=0)
+        dialog.add_buttons(Gtk.STOCK_OK, Gtk.ResponseType.OK)
+        box = dialog.get_content_area()
+        
+        for url, title in bookmark_items:
+            link = Gtk.LinkButton.new_with_label(url, title)
+            link.connect("clicked", self.on_history_bookmark_clicked, url)
+            box.add(link)
+
+        dialog.show_all()
+        dialog.run()
+        dialog.destroy()
+
+    def on_history_bookmark_clicked(self, widget, url):
+        self.webview.load_uri(url)
+
+# Run the Piperpal Browser Application
+if __name__ == "__main__":
+    app = PiperpalBrowser()
+    app.connect("destroy", Gtk.main_quit)
+    app.show_all()
+    Gtk.main()
